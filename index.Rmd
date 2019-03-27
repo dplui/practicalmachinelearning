@@ -1,0 +1,136 @@
+---
+title: "Practical Machine Learning Assignment: Analysis of Weight Lifting Exercise Dataset"
+author: "Dan Lui"
+date: "26 March 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Executive Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+This project examines data from [this source](http://groupware.les.inf.puc-rio.br/har) consisting of 19622 observations of 160 variables mesaured from accelerometers on the belt, forearm, arm, and dumbell of 6 participants that  were asked to perform barbell lifts correctly and incorrectly in 5 different ways. I use the data to build a model to predict the manner in which they did the exercise. I construct the model using a random forest algorithm in R, acheiving a high degreee of accuracy before applying it to a test dataset.
+
+## Data and Package Loading
+
+``` {r loadpackages}
+library(caret)
+```
+
+The data is sourced and loaded as follows:
+```{r loadingdata}
+### Check to see if data is in working directory and load the data
+if (file.exists("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv") == FALSE){
+  fileurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(fileurl, destfile = "./pml-training.csv")
+  fileurl2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(fileurl, destfile = "./pml-testing.csv")
+}
+```
+
+```{r readingdata, cache = TRUE}
+training <- read.csv("pml-training.csv")
+```
+
+## Selecting Covariants (Predictors)
+
+I follow a three part process for determining which variables to include in the prediction model. Firstly I assess coverage of variables within the data, and find that an inital analysis of missing values (NAs) in the data shows that:
+
+```{r}
+nacols <- colSums(is.na(training))
+narows <- rowSums(is.na(training))
+table(nacols); table(narows)
+```
+
+(1) NAs are concentrated solely in 67 of the 160 variables 
+(2) for this group of 67 variables, there are NAs in the same 98% of observations (19216 of 19622) i.e. there are therefore only 406 oservations (rows) where this group of 67 are measured. There are no measurements for any of these variables in the other 98% of observations.
+
+As such, suppressing these 67 variables from the analysis will improve the parsimony of the model while being unlikley to affect predictions to any great extent, given their low measurement rate within the data.
+
+```{r}
+training2 <- training[,which(colSums(is.na(training))==0)]
+```
+
+Secondly, visual inspection of the data shows that the first few columns represent descriptive identifiers (observation number, subject name, time). These variables will not assist us in creating a prediction model that can be used on generalised data, and instead could confound our model by being closely correlated to the outcome in the current data (if experiments were performed, as is likely, in a specific time or subject order). These variables are  therefore also left out of the model.
+
+```{r}
+training2 <- training2[,8:93]
+```
+
+Thirdly we look for variables that do not display large variance, and are therefore unlikely to have much influence or explanatory power in our prediction model.
+
+```{r}
+nsv <- nearZeroVar(training2,saveMetrics=TRUE)
+training3 <- training3 <- training2[,!nsv$nzv]
+```
+
+## Selecting and Running the Model
+
+I choose a random forest model as it offers a high degree of accuracy from a starting point of a high number of variables. We are also less concerned in this exercise in the interpretibility of results (the main purpose of this limited exercise is to construct a model to make predictions, rather than explain them or validate a theory).
+
+In order to apply cross-validation to my model later on, I create a set of hold-out data consiting of 25 per cent of the total observations, and train my model on the remaining 75 per cent.
+
+```{r}
+inTraining <- createDataPartition(training3$classe, p = .75, list=FALSE)
+training4 <- training3[inTraining,]
+testing4 <- training3[-inTraining,]
+```
+
+To speed up calculations, I run the model using a parallel procedure as outlined and recommended in [this post](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md) on the course website.
+
+```{r}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+# set up training run for x / y syntax because model format performs poorly
+x <- training4[,-53]
+y <- training4[,53]
+
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+```{r, cache=TRUE}
+fit <- train(x,y, method="rf",data=training4,trControl = fitControl)
+```
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+## Results and Cross Validation
+
+The final model and results are summarised by calling summary statistcs as follows: 
+```{r}
+fit
+fit$finalModel
+fit$resample
+confusionMatrix(fit)
+```
+
+The k-fold and confusion matrix results for the constructed model show a high in-sample accuracy rate of > 99 per cent. The out of sample error rate given through the model construction (OOB estimate) is 0.54 per cent. 
+
+In addition to cross validation within the random forest algorithm, I also test the model against the previoulsy created set of hold-out data.
+
+```{r}
+predictions=predict(fit, newdata=testing4)
+testing4$predRight <- predictions==testing4$classe
+confusionMatrix(predictions, testing4$classe)
+```
+
+The results of the cross validation confirm the accuracy of the model and give an out of sample error rate of (26/4904*100)  = 0.53 per cent.
+
+Finally I applied the model to the test cases in the exercise.  
+```{r, results="hide"}
+testingex <- read.csv("./pml-testing.csv")
+predictex <- predict(fit, newdata=testingex)
+predictex
+```
